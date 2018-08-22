@@ -1,0 +1,23 @@
+{
+  "name": "solidity-debugger-cli",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "prepublish": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "tslint": "tslint ./**/*.ts",
+    "watch": "tsc -w -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^8.0.53"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cli-table": "^0.3.1",
+    "commander": "^2.16.0",
+    "readline-sync": "^1.4.9",
+    "solidity-debugger-core": "*"
+  }
+}
