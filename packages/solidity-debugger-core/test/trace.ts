@@ -30,13 +30,11 @@ async function applyCase(c: Case) {
 
     let steps = await parseTrace(contracts, sources, transaction);
 
-    /*
     // Real trace
 
     for (const step of steps) {
         console.log(`Line: ${step.location.start.line}. Type: ${StepType[step.type]}`)
     }
-    */
 
     const lines = c.trace;
     if (lines.length != steps.length) {

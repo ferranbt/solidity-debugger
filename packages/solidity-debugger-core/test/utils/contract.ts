@@ -12,6 +12,8 @@ const privateKey = process.env.PRIVATE_KEY;
 let wallet = new ethers.Wallet(privateKey, provider);
 wallet.provider = provider;
 
+let signer = provider.getSigner(0);
+
 class Contract {
     contract: any;
     address: any;

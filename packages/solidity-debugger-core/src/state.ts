@@ -8,6 +8,12 @@ import {Step} from './trace';
 
 var util = require('web3-utils');
 
+interface StateStore {
+    storage(slot: number | string): Promise<string>;
+    memory(slot: number): string;
+    stack(slot: number): string;
+}
+
 export class State {
     _provider: Provider;
     
@@ -166,7 +172,8 @@ export function decodeIntFromHex (value, byteLength, signed) {
         bigNumber = bigNumber.fromTwos(8 * byteLength)
     }
 
-    return parseInt(bigNumber.toString(10))
+    return bigNumber
+    // return parseInt(bigNumber.toString(10))
 }
 
 const dummyVariable = (type: TypeName): Variable => ({
@@ -189,10 +196,12 @@ const dummyStorageAssignment = (variable: Variable, bytes: number, slot: number 
     }
 })
 
+var BN = require('ethereumjs-util').BN
+
 async function read(state: State, assignment: Assignment): Promise<string> {
     switch (assignment.Location.kind) {
         case 'storage':
-            let data = await state.storage(assignment.Location.slot);
+            let data = normalizeHex(await state.storage(assignment.Location.slot));
             return extractHexByteSlice(data, assignment.Bytes, assignment.Location.offset);
         case 'stack':
             return state.stack(assignment.Location.position)
@@ -201,30 +210,53 @@ async function read(state: State, assignment: Assignment): Promise<string> {
     }
 }
 
+function normalizeHex (hex) {
+    hex = hex.replace('0x', '')
+    if (hex.length < 64) {
+      return (new Array(64 - hex.length + 1).join('0')) + hex
+    }
+    return hex
+  }
+
+
 // TODO. Some cases the while loop gets stuck in an infinite loop
 async function decodeDynamicBytes(state: State, variable: Variable, location: Storage) {
     let value = await state.storage(location.slot)
+    value = normalizeHex(value);
+    value = extractHexByteSlice(value, 32, 0);
 
-    if (parseInt(value[WORD_SIZE - 1]) % 2 == 0) {
+    var bn = new BN(value, 16)
+
+    if (!bn.testn(0)) {
         var size = parseInt(value.substr(value.length - 2, 2), 16) / 2
         return value.substr(0, size * 2)
     }
 
     let ret = '0x';
-    const length = parseInt(value, 16)
+    let length = parseInt(value, 16);
 
     var dataPos = new BN(sha3_256(location.slot).replace('0x', ''), 16)
 
     let currentSlot = await state.storage(dataPos); // Alreay with some data
 
     while (length > ret.length) {
-        currentSlot = currentSlot.replace('0x', '')
+        currentSlot = normalizeHex(currentSlot.replace('0x', ''))
         ret += currentSlot
         dataPos = dataPos.add(new BN(1))
+
         currentSlot = await state.storage(dataPos);
     }
 
     return ret.substr(0, length+1);
+}
+
+async function readRange(state: State, slot: string, slotbyte: number, offset: number, bytes: number): Promise<string> {
+    let res = '';
+    do {
+        res = res + pad(stripHexPrefix(await state.storage(slot)), slotbyte);
+        slot = '0x' + add(slot, 1).toString(16)
+    } while((res.length/2) < bytes);
+    return res.substr(offset, bytes-1)
 }
 
 async function decodeSlice(state: State, variable: Variable, location: Storage): Promise<any[]> {
@@ -241,18 +273,38 @@ async function decodeSlice(state: State, variable: Variable, location: Storage):
     
     const slotValue = await state.storage(location.slot);
     const size = toBN(slotValue).toNumber();
+    
+    /*
+    console.log(bytes)
+
+    console.log(size * underlyingVariable.bytes)
+    console.log(size * underlyingVariable.bytes / 32);
+    */
+
+    let slot = sha3_256(location.slot);
+    
+    /*
+    const xxx = await readRange(state, slot, bytes, 0, size * underlyingVariable.bytes);
+
+    console.log("--- xxxx ---")
+    console.log(xxx)
+    
+    console.log("-- OTHER --")
+    */
 
     let offset = 0;
-    let slot = sha3_256(location.slot);
 
     // Again hardcode the number of slots. TODO: Change this.
     const SLOTS = 1;
     let res: any[] = [];
 
     for (var i=0; i<size; i++) {
+        // console.log(`Slot: ${slot}`)
+
         let underlying = dummyStorageAssignment(underlyingVariable, bytes, slot, offset);
 
         const val = await _decodeStorage(state, underlying);
+        // console.log(val)
         res.push(val);
 
         if (SLOTS === 1 && offset + bytes <= 32) {
@@ -371,7 +423,22 @@ async function _decodeStorage(state: State, assignment: Assignment) {
             const data = await decodeDynamicBytes(state, assignment.Variable, assignment.Location);
             return _decodeValue(data, assignment);
         default:
-            return _decodeValue(await read(state, assignment), assignment)
+            /*
+            console.log("-- decode --")
+            console.log(assignment)
+            */
+
+            const xx = await read(state, assignment);
+
+            /*
+            console.log("-- xx --")
+            console.log(xx)
+
+            console.log("-- raw --")
+            console.log(await state.storage(assignment.Location.slot))
+            */
+
+            return _decodeValue(xx, assignment)
     }
 }
 
