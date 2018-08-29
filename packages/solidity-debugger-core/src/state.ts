@@ -421,7 +421,7 @@ async function _decodeStorage(state: State, assignment: Assignment) {
         case 'bytes':
         case 'string':
             const data = await decodeDynamicBytes(state, assignment.Variable, assignment.Location);
-            return _decodeValue(data, assignment);
+            return _decodeValue(data.startsWith('0x') ? data : '0x' + data, assignment);
         default:
             /*
             console.log("-- decode --")

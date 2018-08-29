@@ -344,6 +344,7 @@ type Case = {
     send?: any[]
 }
 
+/*
 let types: TypeName[] = shuffle([
     ...generateTypes(5, makeSimpleVariable),
     ...generateTypes(2, makeUserDefined),
@@ -359,6 +360,7 @@ ${printContract('Sample', variables)}
 console.log(sample)
 
 // 0x081bfa5e47025c3d9df11b003b38cf8096dcb9c432eed1f40c1fbf18434b
+*/
 
 const cases: Case[] = [
     {
@@ -374,15 +376,17 @@ const cases: Case[] = [
                         name: 'bytes8',
                     }
                 },
+                */
                 {
                     type: Type.ElementaryTypeName,
-                    name: 'address'
+                    name: 'string'
                 },
-                */
+                /*
                 {
                     type: Type.ElementaryTypeName,
                     name: 'bytes'
                 }
+                */
             ]
         ],
     },
@@ -392,7 +396,7 @@ const cases: Case[] = [
 
     // Table cases
     
-    return
+    return;
 
     for (const cc of cases) {
         
@@ -445,9 +449,8 @@ const cases: Case[] = [
 
     // Arrays as variables test
 
-    return;
-
     let types: TypeName[] = shuffle([
+        ...generateTypes(5, makeSimpleVariable),
         ...generateTypes(1, makeArrays),
     ])
 
@@ -467,7 +470,7 @@ const cases: Case[] = [
 (async() => {
 
     // One contract
-    
+
     return;
 
     let types: TypeName[] = shuffle([
@@ -531,7 +534,7 @@ async function applyRandom(variables: {[name: string]: Variable}, sample: string
 
     const {contract} = await newContract(abi).deploy('0x' + bin)
     
-    for (let i=0; i<=1000; i++) {
+    for (let i=0; i<=100; i++) {
         console.log("#####################################################")
 
         const assignment = getRandom(assignments);
@@ -557,9 +560,9 @@ async function applyRandom(variables: {[name: string]: Variable}, sample: string
         
         try {
             // will throw if not correct
-            expect(realValue).to.deep.equal(value)
+            expect(realValue.toString()).to.deep.equal(value.toString())
         } catch (err) {
-            console.log(`${realValue.toString()}, ${value.toString()}`)
+            console.log(`${realValue}, ${value}`)
             throw Error('')
         }
         
@@ -568,11 +571,7 @@ async function applyRandom(variables: {[name: string]: Variable}, sample: string
             throw Error('')
         }
         */
-
-        /*
-
-        */
-
+       
         /*
         if (value != realValue) {
             throw Error('')
