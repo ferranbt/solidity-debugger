@@ -63,6 +63,8 @@ export function shuffle(a) {
     return a;
 }
 
+type UserTypes = {[name: string]: TypeName}
+
 // ---- Generate random types ----
 
 const elementaryTypes = [
@@ -73,7 +75,10 @@ const elementaryTypes = [
     'address',
     'bytesx',
     'bytes',
-    'string'
+    'string',
+
+    // special case
+    'user',
 ]
 
 const integersX = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256];
@@ -93,8 +98,31 @@ export const createStorageVariable = (name: string, type: TypeName): Variable =>
     bytes: getBytes(type),
 })
 
-export function makeSimpleVariable(allowDynamicSize: boolean=false): TypeName {
-    let type = getRandom(elementaryTypes)
+// Fix, some times null because tries to call makeuserdefined with nothing there
+
+function getType(allowUserDefined: boolean): string {
+    while(true) {
+        let type = getRandom(elementaryTypes)
+        if (type == 'user') {
+            if (allowUserDefined) {
+                return type
+            }
+        } else {
+            return type
+        }
+    }
+}
+
+// TODO. bytes is allowed only in experimental
+// TODO. make something to retry types.
+
+export function makeSimpleVariable(usertypes: UserTypes): TypeName {
+    
+    let type = getType(Object.keys(usertypes).length != 0)
+
+    if (type == 'user') {
+        return makeUserDefined(usertypes);
+    }
 
     if (type == 'intx' || type == 'uintx') {
         type = type.replace('x', '') + getRandom(integersX)
@@ -118,41 +146,44 @@ export function makeSimpleVariable(allowDynamicSize: boolean=false): TypeName {
     }
 }
 
-export function makeArrays(): TypeName {
+const MAX_ARRAY_DEPTH = 3;
+
+export function makeArrays(usertypes: UserTypes, depth: number=0): TypeName {
     return {
         type: Type.ArrayTypeName,
         name: 'array',
-        base: makeSimpleVariable()
+        base: makeSimpleVariable(usertypes)
+        // base: randomNumber(0, 10) < 3 && depth < MAX_ARRAY_DEPTH ? makeArrays(usertypes, depth+1) : ),
     }
 }
 
-export function makeUserDefined(): TypeName {
-    if (randomNumber(0, 10) < 5) {
-        // enum
-        return {
-            type: Type.UserDefinedTypeName,
-            name: 'enum',
-            values: ['A', 'B', 'C', 'D', 'E']
-        }
-    } else {
-        // struct
+export function makeUserDefined(userDefined: UserTypes): TypeName {
+    const name = getRandom(Object.keys(userDefined))
 
-        let types: TypeName[] = shuffle([
-            ...generateTypes(3, makeArrays),
-        ])
-        
-        let variables = types.map((type, i) => createStorageVariable(`val${i++}`, type));
+    // add reference name for the mapping
+    let tt = userDefined[name]
 
-        return {
-            type: Type.UserDefinedTypeName,
-            name: 'struct',
-            members: variables,
-        }
+    /*
+    console.log(userDefined)
+    console.log(name)
+    console.log(tt)
+    */
+    
+    tt.refName = name
+
+    return tt;
+
+    /*
+    return {
+        type: Type.UserDefinedTypeName,
+        name: tt.name,
+        refName: name,
     }
+    */
 }
 
-export function generateTypes(n: number, generator: () => TypeName): TypeName[] {
-    return range(0, n).map(generator)
+export function generateTypes(n: number, generator: (usertypes: UserTypes) => TypeName, usertypes: UserTypes={}): TypeName[] {
+    return range(0, n).map(i => generator(usertypes))
 }
 
 // ---- Generate random values ----
@@ -260,11 +291,12 @@ const printVariables = (variables: Variable[]): string[] => variables.map(printT
 function printTypeName(variable: Variable): string {
     switch(variable.type.name) {
         case 'enum':
-            return `enum ${variable.name} {${(variable.type.values as string[]).join(',\n')}}`
         case 'struct':
-            return `struct ${variable.name} {${printVariables(variable.type.members as Variable[]).join('\n')}}`
+            return `${variable.type.refName} ${variable.name};`
         case 'array':
-            return `${(variable.type.base as TypeName).name}[] ${variable.name};`;
+            // FIX
+            const name = (variable.type.base as TypeName).name;
+            return `${name == 'struct' || name == 'enum' ? (variable.type.base as TypeName).refName : name}[] ${variable.name};`;
         default:
             return `${variable.type.name} ${variable.name};`
     }
@@ -272,6 +304,9 @@ function printTypeName(variable: Variable): string {
 
 function printFunctionParameters(type: TypeName): string {
     switch (type.name) {
+        case 'enum':
+        case 'struct':
+            return ''
         case 'array':
             return `${(type.base as TypeName).name}[] val`;
         default:
@@ -281,6 +316,9 @@ function printFunctionParameters(type: TypeName): string {
 
 function printFunctionBody(variableName: string, type: TypeName): string {
     switch (type.name) {
+        case 'enum':
+        case 'struct':
+            return ''
         case 'array':
             return `${variableName}.length = 0;
         for (uint i = 0; i < val.length; i++) {
@@ -293,20 +331,18 @@ function printFunctionBody(variableName: string, type: TypeName): string {
 }
 
 function printFunction(variable: Variable): string {
-    if (variable.type.name == 'struct' || variable.type.name == 'enum') {
-        return '';
-    }
-
     return `function set_${variable.name}(${printFunctionParameters(variable.type)}) public payable {
         ${printFunctionBody(variable.name, variable.type)}
     }`
 }
 
-function printContract(name: string, vars: Variable[], parent: string[]=[]): string {
+function printContract(name: string, vars: Variable[], parent: string[]=[], userDefined: UserTypes={}): string {
     let variables: string[] = printVariables(vars);
     let functions: string[] = vars.map(printFunction)
+    let userDef: string[] = Object.keys(userDefined).map(name => printUserDefined(name, userDefined[name], userDefined))
 
     return `contract ${name} ${parent.length == 0 ? '' : 'is ' + parent.join(', ')} {
+    ${userDef.join('\n    ')}
     ${variables.join('\n    ')}
 
     ${functions.join('\n    ')}
@@ -337,6 +373,100 @@ const printContractWithDifferentFathers = (chunks: Variable[][]): string[] => {
     
     return chunks.map((v, indx) => printContract('Sample' + (indx == 0 ? '' : indx), v, parents())).reverse()
 }
+
+const DEFAULT_PRAGMA = "^0.4.22";
+
+// At the beggining of the contract run this to show structs and enums
+// TODO. add contract
+function printUserDefined(name: string, type: TypeName, userDefined: UserTypes) {
+    switch (type.name) {
+        case 'enum':
+            return `enum ${name}{\n        ${(type.values as string[]).join(',\n        ')}\n    }`;
+        case 'struct':
+            const body = (type.members as Variable[]).map(i => printTypeName(i))
+            return `struct ${name}{\n        ${body.join('\n        ')}\n    }`;
+        default:
+            throw Error('')
+    }
+}
+
+class Scenario {
+    pragma: string=DEFAULT_PRAGMA;
+    userDefined: UserTypes={};
+    variables: Variable[];
+
+    constructor() {
+
+    }
+
+    // necessary here to pipe the userdefined items
+    // u run this ones at the beginning
+    private create_UserDefined(): TypeName {
+        if (randomNumber(0, 10) < 5) {
+            // enum
+            return {
+                type: Type.UserDefinedTypeName,
+                name: 'enum',
+                values: ['A', 'B', 'C', 'D', 'E']
+            }
+        } else {
+            let types: TypeName[] = shuffle([
+                ...generateTypes(1, makeArrays, this.userDefined),
+                ...generateTypes(2, makeSimpleVariable, this.userDefined),
+                ...generateTypes(1, makeUserDefined, this.userDefined),
+            ])
+            
+            // NEXT. TODO. we need to normalize the enums values and collapse everything
+            // to remove the references
+            let variables = types.map((type, i) => createStorageVariable(`val${i++}`, type));
+
+            return {
+                type: Type.UserDefinedTypeName,
+                name: 'struct',
+                members: variables,
+            }
+        }
+    }
+
+    // create UserDefined types (struct, enum)
+    public createUserDefined() {
+        for (let i=0; i<3; i++) {
+            this.userDefined[`Defined${i}`] = this.create_UserDefined()
+        }
+    }
+
+    public generateVariables() {
+        let types: TypeName[] = shuffle([
+            ...generateTypes(5, makeSimpleVariable, this.userDefined),
+            ...generateTypes(2, makeArrays, this.userDefined),
+            ...generateTypes(5, makeUserDefined, this.userDefined),
+        ])
+
+        this.variables = types.map((type, indx) => createStorageVariable(`val${indx}`, type));
+    }
+
+    public printContract(): string {
+        return `pragma solidity ${this.pragma};
+
+${printContract('Sample', this.variables, [], this.userDefined)}
+`
+    }
+}
+
+let scenario = new Scenario();
+scenario.createUserDefined()
+scenario.generateVariables();
+
+//console.log(JSON.stringify(scenario.generateTypes(), null, 2))
+
+/*
+for (const name in scenario.userDefined) {
+    console.log(name)
+    console.log(printUserDefined(name, scenario.userDefined[name], scenario.userDefined))
+}
+*/
+
+console.log(scenario.printContract())
 
 type Case = {
     name: string,
@@ -448,6 +578,8 @@ const cases: Case[] = [
 (async() => {
 
     // Arrays as variables test
+
+    return;
 
     let types: TypeName[] = shuffle([
         ...generateTypes(5, makeSimpleVariable),

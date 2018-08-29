@@ -25,9 +25,10 @@ export type TypeName = {
     type: Type,
     name: string,   
     base?: TypeName,        // arrays
+    refName?: string        // structs
+    members?: Variable[],   // structs
     keyType?: TypeName,     // mapping
     valueType?: TypeName,   // mapping
-    members?: Variable[],   // structs
     values?: string[],      // enums
 }
 
@@ -104,7 +105,7 @@ function parseType(x: Nodex, data: {[contract: string]: UserTypes}): TypeName {
 
 const getBytesFromEnum = (val: TypeName): number => {
     if (val.values == undefined) {
-        throw Error('')
+        throw Error('values not found: ' + JSON.stringify(val))
     }
 
     let storageBytes = 0
