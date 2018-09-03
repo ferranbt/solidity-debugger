@@ -168,6 +168,10 @@ export function getBytes(val: TypeName): number {
                 return 20;
             }
             
+            if (val.name == 'byte') {
+                return 1;
+            }
+            
             if (val.name == 'bytes') {
                 return 32;
             }

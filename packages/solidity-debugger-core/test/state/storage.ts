@@ -13,6 +13,7 @@ import {walkAndFind} from '../../src/artifacts/ast';
 import {getStateVariables, getUserTypes} from '../../src/artifacts/contracts';
 
 import {compile, DEFAULT_FILENAME} from '../utils/compiler'
+import { pbkdf2 } from 'crypto';
 var BN = require('ethereumjs-util').BN
 
 // ---- utils ----
@@ -241,18 +242,64 @@ export async function generateRandomElementaryTypes(type: TypeName) {
 export async function generateRandomValues(type: TypeName): Promise<any> {
     switch (type.name) {
         case 'struct':
-            const vals = await Promise.all(validMembers(type.members as Variable[]).map(v => generateRandomValues(v.type)));
-            return vals
+
+            let values0: any[] = [];
+            let show0 = {};
+
+            for (const val of validMembers(type.members as Variable[])) {
+                const x = await generateRandomValues(val.type);
+
+                values0.push(x)
+                show0[val.name] = x;
+            }
+
+            return {
+                value: values0,
+                show: show0
+            }
+
         case 'enum':
-            // 'string'
             const values = type.values as string[]
-            return values.indexOf(getRandom(values))
+            const value = getRandom(values);
+
+            return {
+                value: values.indexOf(value),
+                show: value,
+            }
         case 'array':
             const v = await Promise.all(range(0, randomNumber(0, 10)).map(i => generateRandomValues(type.base as TypeName)))
             return v
         default:
             return generateRandomElementaryTypes(type)
     }
+}
+
+const isArray   = (a) => (!!a) && (a.constructor === Array);
+const isObject  = (a) => (!!a) && (a.constructor === Object);
+
+const getTransactionValues = (obj) => getParsedValues(obj, false);
+const getShowValues = (obj) => getParsedValues(obj, true);
+
+// its always an array for now
+function getParsedValues(obj, isShow: boolean) {
+    if (isArray(obj)) {
+        return obj.map(i => getParsedValues(i, isShow))
+    } else if (isObject(obj)) {
+
+        if (obj['show'] != undefined && obj['value'] != undefined) {
+            return getParsedValues(isShow ? obj['show'] : obj['value'], isShow)
+        }
+
+        let res = {};
+        for (const name in obj) {
+            res[name] = getParsedValues(obj[name], isShow)
+        }
+
+        return res;
+    }
+
+    // normal value
+    return obj  
 }
 
 // ---- Generate contract.sol ----
@@ -426,7 +473,7 @@ class Scenario {
     public generateVariables() {
         let types: TypeName[] = shuffle([
             ...generateTypes(3, makeSimpleVariable, this.userDefined),
-            // ...generateTypes(1, makeArrays, this.userDefined),
+            ...generateTypes(1, makeArrays, this.userDefined),
         ])
 
         this.variables = types.map((type, indx) => createStorageVariable(`val${indx}`, type));
@@ -440,69 +487,106 @@ ${printContract('Sample', this.variables, [], this.userDefined)}
     }
 }
 
-const sampl = `pragma solidity ^0.4.22;
+async function cases0() {
 
-contract Sample  {
-    enum Defined0{
-        H,
-        P
+    type Case = {
+        source: string
+        case: {
+            method?: string,
+            params?: any[],
+            variables: {[name: string]: any}
+        }
     }
-    struct Defined1{
-        address val0;
-        string val1;
-        Defined0 val2;
-        address val3;
-        Defined0 val4;
-        address[] val5;
-        bytes21[] val6;
-    }
-    struct Defined2{
-        bytes val0;
-        Defined0 val1;
-        uint72[] val2;
-        int128[] val3;
-        Defined0 val4;
-        bytes val5;
-        bytes val6;
-    }
-    bytes val0;
-    Defined2 val1;
-    uint96 val2;
-    address val3;
 
-    function set_val0(bytes val) public payable {
-        val0 = val;
+    const cases: Case[] = [
+        {
+            source: `pragma solidity ^0.4.22;
+contract Sample {
+    struct A {
+        int a;
     }
-    function set_val1(bytes val_0, Defined0 val_1, Defined0 val_2, bytes val_3, bytes val_4) public payable {
-        val1.val0 = val_0;
-        val1.val1 = val_1;
-        val1.val4 = val_2;
-        val1.val5 = val_3;
-        val1.val6 = val_4;
+    bytes8 aux;
+    A one;
+
+    function test() {
+        one.a = 10;
     }
-    function set_val2(uint96 val) public payable {
-        val2 = val;
+}`,
+            case: {
+                variables: {
+                    'one': {
+                        'a': 10
+                    }
+                }
+            },
+        },
+        {
+            source: `pragma solidity ^0.4.22;
+contract Sample {
+    struct A {
+        bytes8 aux;
+        int[] a;
     }
-    function set_val3(address val) public payable {
-        val3 = val;
+    bytes8 aux;
+    A one;
+            
+    function test() {
+        one.aux = 0x1;
+        one.a.push(10);
+        one.a.push(20);
+    }
+}`,
+            case: {
+                variables: {
+                    'one': {
+
+                    }
+                }
+            }
+        }
+    ]
+    
+    for (const c of cases) {
+
+        const method = c.case.method || 'test'
+        const params = c.case.params || [];
+
+        const {contract, assignments} = await deployThings(c.source)
+        
+        const transaction = await contract.send(method, params);
+        
+        const state = new State(transaction.blockNumber as number, true);
+        state.setAddress(contract.address);
+
+        for (const name in c.case.variables) {
+            const assignment = assignments.filter(a => a.Variable.name == name)
+            if (assignment.length != 1) {
+                throw Error(`Variable with name '${name}' not found`)
+            }
+
+            const value = await decodeAssignment(state, assignment[0]);
+
+            console.log("-- value --")
+            console.log(value)
+
+        }
     }
 }
-`;
 
 (async() => {
 
-    // specific use cases
-    
-    return;
-
-    await applyRandom(sampl);
+    await cases0();
 
 })();
+
+
 
 (async() => {
 
     // Example with structs (it does not modify structs yet)
-    
+
+    return;
+
     for (let i=0; i < 100; i++) {
         let scenario = new Scenario();
         scenario.createUserDefined()
@@ -712,6 +796,32 @@ const cases: Case[] = [
 
 })();
 
+async function deployThings(sample: string) {
+
+    const output = compile(sample);
+    const result = output.contracts[DEFAULT_FILENAME]['Sample'];
+
+    const bin = result.evm.bytecode.object
+    const abi = result.abi;
+    const ast = output.sources[DEFAULT_FILENAME].ast;
+    
+    const contracts         = walkAndFind(ast, 'ContractDefinition');
+    const contractsById     = arrayToObject(contracts, 'id')
+    const contractsByName   = arrayToObject(contracts, 'name');
+
+    const userTypes         = getUserTypes(contracts);
+
+    const stateVariables    = getStateVariables(contractsByName['Sample'], contractsById)
+    const {assignments}     = parseStorage(stateVariables.map(i => parseVariable(i, userTypes)))
+
+    const {contract} = await newContract(abi).deploy('0x' + bin)
+    
+    return {
+        contract,
+        assignments
+    }
+}
+
 async function applyRandom(sample: string) {
     
     console.log(sample)
@@ -751,16 +861,33 @@ async function applyRandom(sample: string) {
         console.log(assignment.Variable.name)
         
         // skip enum now
+        /*
         if (assignment.Variable.type.name == 'enum' || assignment.Variable.type.name == 'struct') {
             continue
         }
-        
-        const realValue     = await generateRandomValues(assignment.Variable.type)
+        */
+
+        const realValue  = await generateRandomValues(assignment.Variable.type)
 
         console.log("-- real random value --")
         console.log(realValue)
 
-        const transaction   = await contract.send('set_' + assignment.Variable.name, [realValue]);
+        console.log("-- transaction values --")
+        console.log(getTransactionValues(realValue))
+        
+        console.log("-- show values --")
+        console.log(getShowValues(realValue))
+        
+        let txvalues = getTransactionValues(realValue);
+        
+        console.log("-- tx values --")
+        console.log(txvalues)
+
+        if (assignment.Variable.type.name != 'struct') {
+            txvalues = [txvalues]
+        }
+        
+        const transaction = await contract.send('set_' + assignment.Variable.name, txvalues);
         
         const state = new State(transaction.blockNumber as number, true); // disable cache
         state.setAddress(contract.address);
@@ -770,27 +897,25 @@ async function applyRandom(sample: string) {
         console.log("-- get value --")
         console.log(value)
         
+        console.log("-- compared value --")
+        console.log(getShowValues(realValue))
+        
         try {
+            /*
             // will throw if not correct
-            expect(realValue.toString()).to.deep.equal(value.toString())
+            console.log("- one -")
+            console.log(getShowValues(realValue).toString())
+
+            console.log("- two -")
+            console.log(value.toString())
+            */
+            
+            expect(getShowValues(realValue).toString()).to.deep.equal(value.toString())
         } catch (err) {
             console.log(`${realValue}, ${value}`)
             console.log(assignment.Variable.type)
             throw Error('values dont match')
         }
         
-        /*
-        if (realValue != value.toString()) {
-            throw Error('')
-        }
-        */
-       
-        /*
-        if (value != realValue) {
-            throw Error('')
-        }
-        */
-        
-        // realValue == value
     }
 }
