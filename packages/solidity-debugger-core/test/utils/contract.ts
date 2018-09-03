@@ -24,6 +24,13 @@ class Contract {
     }
 
     async send(method: string, args: any[]): Promise<Transaction> {
+        console.log("-- send values --")
+        console.log("-- normal --")
+        console.log(args)
+
+        console.log("-- decoupled --")
+        console.log(...args)
+
         let receipt = await this.contract[method](...args);
         const tx = await provider.getTransaction(receipt.hash)
         return tx;

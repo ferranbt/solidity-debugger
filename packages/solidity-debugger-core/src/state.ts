@@ -1,6 +1,6 @@
 
 import Provider from './provider';
-import {Variable, getBytes, Type, TypeName} from './artifacts/variables';
+import {Variable, getBytes, getSlots, Type, TypeName} from './artifacts/variables';
 import {extractHexByteSlice, pad} from './utils';
 import {stripHexPrefix} from 'ethereumjs-util';
 import {sha3_256, toBN, add} from './utils';
@@ -126,23 +126,29 @@ export const parseStack = (variable: Variable, stack: number): Assignment => ({
     }
 })
 
-export function parseStorage(variables: Variable[]): Assignment[] {
+export function parseStorage(variables: Variable[]): {assignments: Assignment[], slots: number} {
     let offset = 0;
     let slot = 0;
     
-    let res: Assignment[] = [];
+    let assignments: Assignment[] = [];
     for (var variable of variables) {
 
-        let bytes = getBytes(variable.type);
+        const bytes = getBytes(variable.type);
+        
+        let slots_used = getSlots(variable.type);
+
+        console.log("-- slots used --")
+        console.log(variable.name)
+        console.log(variable.type)
+        console.log(slots_used)
+        console.log(variable.type.refName)
 
         if (offset + bytes > 32) {
             slot++;
             offset = 0;
         }
-        
-        const SLOTS_USED = 1;
 
-        res.push({
+        assignments.push({
             Variable: variable,
             Bytes: bytes,
             Location: {
@@ -152,15 +158,22 @@ export function parseStorage(variables: Variable[]): Assignment[] {
             }
         })
 
-        if (SLOTS_USED === 1 && offset + bytes <= 32) {
+        if (slots_used === 1 && offset + bytes <= 32) {
             offset += bytes
         } else {
-            slot != SLOTS_USED;
+            slot += slots_used;
             offset = 0;
         }
     }
 
-    return res;
+    if (offset > 0) {
+        slot++
+    }
+
+    return {
+        assignments,
+        slots: slot,
+    };
 }
 
 var BN = require('ethereumjs-util').BN
@@ -332,9 +345,9 @@ async function decodeStruct(state: State, variable: Variable, location: Storage)
         throw Error('Members should not be undefined')
     }
 
-    let members2 = parseStorage(members)
+    let {assignments} = parseStorage(members)
 
-    for (var member of members2) {
+    for (var member of assignments) {
         
         let loc = member.Location;
         if (loc.kind !== "storage") {

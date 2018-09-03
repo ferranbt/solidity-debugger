@@ -2,6 +2,7 @@
 // all the variables stuff
 import {Nodex} from '../types'
 import {UserTypes} from './contracts';
+import {parseStorage} from '../state';
 
 // TODO. when creating the assignment check for the location string.
 export const parseVariable = (node: Nodex, data: {[contract: string]: UserTypes}={}): Variable => ({
@@ -42,7 +43,7 @@ export type Variable = {
     bytes: number,
 }
 
-function parseType(x: Nodex, data: {[contract: string]: UserTypes}): TypeName {
+export function parseType(x: Nodex, data: {[contract: string]: UserTypes}): TypeName {
     switch (x.nodeType) {
         case "ElementaryTypeName":
             return {
@@ -67,14 +68,18 @@ function parseType(x: Nodex, data: {[contract: string]: UserTypes}): TypeName {
 
             if (type.startsWith('struct')) {
                 type = type.replace("struct ", "")
+                
+                // TODO. raise error when not found the struct, same with enum
 
                 // contract
                 const [contract, struct] = type.split('.')
-                return {
+                let x = {
                     name: 'struct',
                     type: Type.UserDefinedTypeName,
                     members: data[contract].structs[struct].members,
                 }
+
+                return x
             }  
 
             if (type.startsWith('enum')) {
@@ -117,6 +122,21 @@ const getBytesFromEnum = (val: TypeName): number => {
     }
     
     return storageBytes;
+}
+
+// TODO: Join with getBytes
+export function getSlots(val: TypeName): number {
+    switch (val.type) {
+        case Type.UserDefinedTypeName:
+            if (val.name == 'struct') {
+                const {slots} = parseStorage(val.members as Variable[])
+                return slots
+            }
+        case Type.ArrayTypeName:
+            // FIX.
+    }
+
+    return 1;
 }
 
 export function getBytes(val: TypeName): number {

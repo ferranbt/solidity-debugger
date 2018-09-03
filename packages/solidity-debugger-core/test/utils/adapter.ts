@@ -8,13 +8,7 @@ export class TestAdapter implements Adapter {
 
     constructor(content: string) {
         let output = compile(content);
-
-        for (const err of output.errors) {
-            if (err.severity == 'error') {
-                throw Error(`Error compiling: ${err.formattedMessage}`)
-            }
-        }
-
+        
         const contracts = output.contracts[DEFAULT_FILENAME];
         const source    = output.sources[DEFAULT_FILENAME];
 

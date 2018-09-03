@@ -7,7 +7,7 @@ import parseOpcodes, {Opcode} from './opcodes';
 import {getLocationByOffset, getCheckpoints} from './sources';
 import { bytecodeId } from '../utils';
 import { join } from 'path';
-import {parseVariable, Variable} from './variables'
+import {parseVariable, Variable, TypeName, Type, getBytes, parseType} from './variables'
 
 export function arrayToObject(array, keyField) {
     return array.reduce((obj, item) => {
@@ -22,10 +22,45 @@ type Struct = {
     members: Variable[],
 }
 
-const parseStruct = (node: Nodex): Struct => ({
+type Aux = {[name: string]: {
+    structs: {[name: string]: Nodex},
+    enums: {[name: string]: Nodex},
+}}
+
+const parseStructVariable = (node: Nodex, data: Aux={}, userTypes: {[contract: string]: UserTypes}): Variable => ({
+    id: node.id,
     name: node.name,
-    members: [],
-    // members: node.members.map(j => parseVariable(j, {}))
+    location: 'storage',
+    type: parseStructType(node.typeName, data, userTypes),
+    scope: node.scope,
+    state: node.stateVariable,
+    bytes: getBytes(parseStructType(node.typeName, data, userTypes)),    // not fancy
+})
+
+function parseStructType(x: Nodex, data: Aux, userTypes: {[contract: string]: UserTypes}): TypeName {
+    switch (x.nodeType) {
+        case "UserDefinedTypeName":
+            let type = x.typeDescriptions.typeString;
+
+            if (type.startsWith('struct')) {
+                type = type.replace("struct ", "")
+
+                const [contract, struct] = type.split('.')
+                return {
+                    name: 'struct',
+                    type: Type.UserDefinedTypeName,
+                    members: data[contract].structs[struct].members.map(i => parseStructVariable(i, data, userTypes)),
+                }
+            }
+    }
+
+    // parsetype wont need those special types since the ones that use them are not connected??
+    return parseType(x, userTypes)
+}
+
+const parseStruct = (node: Nodex, data: Aux, userTypes: {[contract: string]: UserTypes}): Struct => ({
+    name: node.name,
+    members: node.members.map(j => parseStructVariable(j, data, userTypes))
 })
 
 // Enum type
@@ -47,12 +82,6 @@ export type UserTypes = {
     enums: {[enm: string]: Enum},
 }
 
-const retrieveUserTypes = (node: Nodex): UserTypes => ({
-    'contract': node.name,
-    'structs':  arrayToObject(walkAndFind(node, 'StructDefinition').map(parseStruct), 'name'),
-    'enums':    arrayToObject(walkAndFind(node, 'EnumDefinition').map(parseEnum), 'name'),
-})
-
 export type Contract = {
     name: string,
     deployed: Bytecode,
@@ -71,6 +100,38 @@ export function getStateVariables(contract: Nodex, contracts: {[id: string]: Nod
     return [].concat.apply([], contract.linearizedBaseContracts.reverse().map(i => contracts[i]).map(retrieveStateVariables));
 }
 
+// FIX: this is quite hacky
+export function getUserTypes(contracts: Nodex[]): {[name: string]: UserTypes} {
+    let userTypes: {[name: string]: UserTypes} = {}
+
+    let aux: Aux = {}
+    
+    // prefill enums and prepare structs
+    for (const contract of contracts) {
+        aux[contract.name] = {
+            structs:    arrayToObject(walkAndFind(contract, 'StructDefinition'), 'name'),
+            enums:      arrayToObject(walkAndFind(contract, 'EnumDefinition'), 'name'),
+        }
+
+        userTypes[contract.name] = {
+            contract: contract.name,
+            structs: {},
+            enums: arrayToObject(walkAndFind(contract, 'EnumDefinition').map(parseEnum), 'name')
+        }
+    }
+
+    // fill structs
+    for (const contract in aux) {
+        const {structs, enums} = aux[contract];
+        
+        for (const s in structs) {
+            userTypes[contract].structs[s] = parseStruct(structs[s], aux, userTypes)
+        }
+    }
+
+    return userTypes;
+}
+
 // return the contract. u have enough there
 function parseContract(data: ContractData): Contract | undefined {
     
@@ -82,8 +143,8 @@ function parseContract(data: ContractData): Contract | undefined {
     const byName: {[name: string]: Nodex} = arrayToObject(contracts, 'name');
     
     // Build enum and structs
-    const userTypes = arrayToObject(contracts.map(retrieveUserTypes), 'contract');
-    
+    const userTypes = getUserTypes(contracts);
+
     // Main contract AST
     const contract = byName[data.contractName]
     if (contract == undefined) {
@@ -91,9 +152,10 @@ function parseContract(data: ContractData): Contract | undefined {
     }
     
     // Parse state variables and create the assignment
-    const stateVariables: Nodex[] = [].concat.apply([], contract.linearizedBaseContracts.reverse().map(i => byId[i]).map(retrieveStateVariables));
-    const storageVariables: Assignment[] = parseStorage(stateVariables.map(i => parseVariable(i, userTypes)))
-
+    // const stateVariables: Nodex[] = [].concat.apply([], contract.linearizedBaseContracts.reverse().map(i => byId[i]).map(retrieveStateVariables));
+    const stateVariables = getStateVariables(contract, byId);
+    const {assignments} = parseStorage(stateVariables.map(i => parseVariable(i, userTypes)))
+    
     // Arrange the nodes in the contract ast by the src
     const nodesBySrc: {[src: string]: Nodex} = arrayToObject([].concat.apply([], contracts.map(walk)), 'src')
 
@@ -131,7 +193,7 @@ function parseContract(data: ContractData): Contract | undefined {
         creation: creation,
         node: contract,
         userTypes: userTypes[data.contractName],
-        globals: storageVariables,
+        globals: assignments,
         parents: parents,
         scopes: scopes,
         abi: data.abi,
