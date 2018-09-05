@@ -136,13 +136,7 @@ export function parseStorage(variables: Variable[]): {assignments: Assignment[],
         const bytes = getBytes(variable.type);
         
         let slots_used = getSlots(variable.type);
-
-        console.log("-- slots used --")
-        console.log(variable.name)
-        console.log(variable.type)
-        console.log(slots_used)
-        console.log(variable.type.refName)
-
+        
         if (offset + bytes > 32) {
             slot++;
             offset = 0;

@@ -1,19 +1,18 @@
 
 // Generate random tests for storage variables
 
-import newContract from '../utils/contract';
+import newContract from './helpers/contract';
 const crypto = require('crypto');
 
 var expect = require('chai').expect
 
-import {TypeName, Type, Variable, getBytes, parseVariable} from '../../src/artifacts/variables';
-import {decodeAssignment, parseStorage, State, decodeIntFromHex, Assignment, decode} from '../../src/state';
-import {arrayToObject} from '../../src/utils';
-import {walkAndFind} from '../../src/artifacts/ast';
-import {getStateVariables, getUserTypes} from '../../src/artifacts/contracts';
+import {TypeName, Type, Variable, getBytes, parseVariable} from '../src/artifacts/variables';
+import {decodeAssignment, parseStorage, State, decodeIntFromHex, Assignment, decode} from '../src/state';
+import {arrayToObject} from '../src/utils';
+import {walkAndFind} from '../src/artifacts/ast';
+import {getStateVariables, getUserTypes} from '../src/artifacts/contracts';
 
-import {compile, DEFAULT_FILENAME} from '../utils/compiler'
-import { pbkdf2 } from 'crypto';
+import {compile, DEFAULT_FILENAME} from './helpers/compiler'
 var BN = require('ethereumjs-util').BN
 
 // ---- utils ----
@@ -74,6 +73,7 @@ const elementaryTypes = [
     'uint',
     'uintx',
     'address',
+    'byte',
     'bytesx',
     'bytes',
     'string',
@@ -487,7 +487,29 @@ ${printContract('Sample', this.variables, [], this.userDefined)}
     }
 }
 
-async function cases0() {
+// To avoid putting a BN object every time on the test cases
+// remove the object and convert the value to number
+// convet bignumber objects into number in string format (i.e. '123')
+function toStringObj(obj) {
+    if (isArray(obj)) {
+        return obj.map(i => toStringObj(i))
+    } else if (isObject(obj)) {
+        let res = {};
+        for (const name in obj) {
+            res[name] = toStringObj(obj[name])
+        }
+
+        return res;
+    } else if (obj.constructor.name == 'BN') {
+        return obj.toNumber()
+    }
+
+    return obj  
+}
+
+import test from 'ava';
+
+function cases0() {
 
     type Case = {
         source: string
@@ -497,7 +519,7 @@ async function cases0() {
             variables: {[name: string]: any}
         }
     }
-
+    
     const cases: Case[] = [
         {
             source: `pragma solidity ^0.4.22;
@@ -508,11 +530,12 @@ contract Sample {
     bytes8 aux;
     A one;
 
-    function test() {
-        one.a = 10;
+    function test(int x) {
+        one.a = x;
     }
 }`,
             case: {
+                params: [10],
                 variables: {
                     'one': {
                         'a': 10
@@ -539,46 +562,89 @@ contract Sample {
             case: {
                 variables: {
                     'one': {
+                        'aux': '0x0000000000000001',
+                        'a': [10, 20]
+                    }
+                }
+            }
+        },
+        {
+            source: `pragma solidity ^0.4.22;
+contract Sample {
+    struct A {
+        bytes8 aux;
+        int[][] a;
+    }
+    bytes8 aux;
+    A one;
 
+    function test() {
+        one.a.push([1, 2, 3]);
+    }
+}`,
+            case: {
+                variables: {
+                    'one': {
+                        'aux': '0x0000000000000000',
+                        'a': [[1, 2, 3]]
                     }
                 }
             }
         }
     ]
     
-    for (const c of cases) {
-
-        const method = c.case.method || 'test'
-        const params = c.case.params || [];
-
-        const {contract, assignments} = await deployThings(c.source)
+    for (const indx in cases) {
+        test(`cases0_${indx}`, async t => {
         
-        const transaction = await contract.send(method, params);
-        
-        const state = new State(transaction.blockNumber as number, true);
-        state.setAddress(contract.address);
-
-        for (const name in c.case.variables) {
-            const assignment = assignments.filter(a => a.Variable.name == name)
-            if (assignment.length != 1) {
-                throw Error(`Variable with name '${name}' not found`)
+            const c = cases[indx]
+            const method = c.case.method || 'test'
+            const params = c.case.params || [];
+    
+            const {contract, assignments} = await deployThings(c.source)
+            
+            const transaction = await contract.send(method, params);
+            
+            const state = new State(transaction.blockNumber as number, true);
+            state.setAddress(contract.address);
+    
+            for (const name in c.case.variables) {
+                const variable = c.case.variables[name];
+                const assignment = assignments.filter(a => a.Variable.name == name)
+                if (assignment.length != 1) {
+                    throw Error(`Variable with name '${name}' not found`)
+                }
+    
+                const value = await decodeAssignment(state, assignment[0]);
+    
+                /*
+                console.log("-- expected --")
+                console.log(variable)
+    
+                console.log("-- value --")
+                console.log(value)
+                
+                console.log(toStringObj(value))
+                */
+                
+                t.deepEqual(variable, toStringObj(value))
+                // expect(variable).to.deep.equal(toStringObj(value));
             }
 
-            const value = await decodeAssignment(state, assignment[0]);
-
-            console.log("-- value --")
-            console.log(value)
-
-        }
+        })
     }
 }
 
+cases0();
+
+/*
 (async() => {
 
     await cases0();
 
 })();
+*/
 
+// AVA TEST
 
 
 (async() => {
