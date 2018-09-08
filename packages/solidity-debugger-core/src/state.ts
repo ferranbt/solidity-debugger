@@ -8,16 +8,10 @@ import {Step} from './trace';
 
 var util = require('web3-utils');
 
-interface StateStore {
-    storage(slot: number | string): Promise<string>;
-    memory(slot: number): string;
-    stack(slot: number): string;
-}
-
 export class State {
     _provider: Provider;
     
-    _memory: string[];
+    _memory: string;
     _stack: string[];
     _storage: { [location: string]: string };
 
@@ -72,12 +66,16 @@ export class State {
         return this._stack[position];
     }
 
+    memory(from: number, length: number) {
+        return this._memory.substr(from, length);
+    }
+
     setStep(step: Step) {
         let address = step.calls[step.calls.length - 1].address;
         let {storage, memory, stack} = step.state;
         
         this._stack = stack;
-        this._memory = memory;
+        this._memory = memory.join('').replace(/0x/g, '');
         this._storage = storage;
         this._address = address;
 
@@ -97,6 +95,7 @@ type Storage = {
 
 type Memory = {
     kind: "memory"
+    position: number
 }
 
 export type Stack = {
@@ -116,6 +115,15 @@ export type Assignment = {
     Bytes: number,
     Location: Location,
 }
+
+export const parseMemory = (variable: Variable, stack: number): Assignment => ({
+    Variable: variable,
+    Bytes: getBytes(variable.type),
+    Location: {
+        kind: "memory",
+        position: stack,
+    }
+})
 
 export const parseStack = (variable: Variable, stack: number): Assignment => ({
     Variable: variable,
@@ -191,6 +199,15 @@ const dummyVariable = (type: TypeName): Variable => ({
     bytes: getBytes(type),
     scope: 0,
     state: false,
+})
+
+const dummyMemoryAssignment = (variable: Variable, bytes: number): Assignment => ({
+    Variable: variable,
+    Bytes: bytes,
+    Location: {
+        kind: "memory",
+        position: 0,
+    }
 })
 
 const dummyStorageAssignment = (variable: Variable, bytes: number, slot: number | string, offset: number): Assignment => ({
@@ -403,10 +420,20 @@ function _decodeValue(data: string, assignment: Assignment): any {
         case "int":
             return decodeIntFromHex(data, assignment.Variable.bytes, true)
         case "address":
+            // Memory values use one single word to store the whole address so there are padded zeros
+            if (data.startsWith("000000000000000000000000")) {  
+                data = data.replace('000000000000000000000000', '');
+            }
+
             return '0x' + data
         case "string":
             return data == '0' ? '' :  util.hexToString(data)
+        case "byte":
         case "bytes":
+            if (data.length / 2 > assignment.Bytes) {
+                data = data.substr(0, assignment.Bytes * 2)
+            }
+
             return data.startsWith('0x') ? data : '0x' + data;
     }
 
@@ -449,6 +476,82 @@ async function _decodeStorage(state: State, assignment: Assignment) {
     }
 }
 
+async function _decodeStructMemory(state: State, assignment: Assignment, offset: number) {
+    let vals: {[name: string]: any} = {};
+
+    for (const member of assignment.Variable.type.members as Variable[]) {
+        
+        let customOffset = offset;
+        if (member.type.name == 'array' || member.type.name == 'bytes' || member.type.name == 'string' || member.type.name == 'struct') {
+            customOffset = parseInt(state.memory(2 * offset, 64), 16);
+        }
+
+        const v = await _decodeMemory(state, dummyMemoryAssignment(dummyVariable(member.type), member.bytes), customOffset);
+
+        vals[member.name] = v;
+        offset += 32;
+    }
+
+    return vals;
+}
+
+async function _decodeSliceMemory(state: State, assignment: Assignment, offset: number) {
+
+    let l1 = state.memory(2 * offset, 64);
+    let l2 = parseInt(l1, 16);
+    
+    offset = offset + 32;
+
+    const base = assignment.Variable.type.base as TypeName
+    const bytes = getBytes(base);
+    const underlyingVariable = dummyVariable(base);
+
+    let vals: any[] = [];
+
+    for (var k = 0; k < l2; k++) {
+        const v = await _decodeMemory(state, dummyMemoryAssignment(underlyingVariable, bytes), offset);
+        offset += 32
+        vals.push(v)
+    }
+
+    return vals;
+}
+
+async function _decodeBytesMemory(state: State, assignment: Assignment, offset: number) {
+
+    offset = 2 * offset
+    let l1 = state.memory(offset, 64)
+    let l2 = 2 * parseInt(l1, 16)
+
+    const data = '0x' + state.memory(offset + 64, l2)
+    
+    if (assignment.Variable.type.name == 'string') {
+        return data == '0x' ? '' :  util.hexToString(data)
+    }
+
+    return data;
+}
+
+async function _decodeMemory(state: State, assignment: Assignment, offset: number) {
+    if (assignment.Location.kind != "memory") {
+        throw Error('xx')
+    }
+
+    switch (assignment.Variable.type.name) {
+        case 'bytes':
+        case 'string':
+            return _decodeBytesMemory(state, assignment, offset);
+        case 'array':
+            return _decodeSliceMemory(state, assignment, offset);
+        case 'struct':
+            return _decodeStructMemory(state, assignment, offset);
+        default:
+            // number of bytes
+            var value = state.memory(2 * offset, 64)
+            return _decodeValue(value, assignment);
+    }
+}
+
 export async function decodeAssignment(state: State, assignment: Assignment): Promise<any> {
     switch (assignment.Location.kind) {
         case "storage":
@@ -456,7 +559,11 @@ export async function decodeAssignment(state: State, assignment: Assignment): Pr
         case "stack":
             return _decodeValue(state.stack(assignment.Location.position), assignment);
         case "memory":
-            return 'memory' // TODO. Retrieve state from memory
+
+            let offset1 = state.stack(assignment.Location.position)
+            let offset = parseInt(offset1, 16)
+
+            return _decodeMemory(state, assignment, offset);
         default:
             throw Error(`State location kind ${assignment.Location.kind} not found.`)
     }

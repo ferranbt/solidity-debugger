@@ -246,11 +246,21 @@ export async function generateRandomValues(type: TypeName): Promise<any> {
             let values0: any[] = [];
             let show0 = {};
 
-            for (const val of validMembers(type.members as Variable[])) {
-                const x = await generateRandomValues(val.type);
+            // for (const val of validMembers(type.members as Variable[])) {
+            for (const variable of type.members as Variable[]) {
 
-                values0.push(x)
-                show0[val.name] = x;
+                let value;
+                if (variable.type.name == 'array') {
+                    value = []
+                } else {
+                    value = await generateRandomValues(variable.type); 
+
+                    if (variable.type.name != 'struct') {
+                        values0.push(value)
+                    }
+                }
+
+                show0[variable.name] = value;
             }
 
             return {
@@ -277,8 +287,8 @@ export async function generateRandomValues(type: TypeName): Promise<any> {
 const isArray   = (a) => (!!a) && (a.constructor === Array);
 const isObject  = (a) => (!!a) && (a.constructor === Object);
 
-const getTransactionValues = (obj) => getParsedValues(obj, false);
-const getShowValues = (obj) => getParsedValues(obj, true);
+export const getTransactionValues = (obj) => getParsedValues(obj, false);
+export const getShowValues = (obj) => getParsedValues(obj, true);
 
 // its always an array for now
 function getParsedValues(obj, isShow: boolean) {
@@ -321,7 +331,7 @@ function printTypeName(variable: Variable): string {
 }
 
 // valid members for struct objects (simpler random objects if we dont consider neither arrays not structs)
-const validMembers = (variables: Variable[]): Variable[] => variables.filter(v => v.type.name != 'struct' && v.type.name != 'array')
+export const validMembers = (variables: Variable[]): Variable[] => variables.filter(v => v.type.name != 'struct' && v.type.name != 'array')
 
 function printFunctionParameters(type: TypeName): string {
     switch (type.name) {
@@ -360,6 +370,8 @@ function printFunction(variable: Variable): string {
         ${printFunctionBody(variable.name, variable.type)}
     }`
 }
+
+export const printUserDefinedItems = (userDefined: UserTypes): string => Object.keys(userDefined).map(name => printUserDefined(name, userDefined[name], userDefined)).join('\n    ')
 
 function printContract(name: string, vars: Variable[], parent: string[]=[], userDefined: UserTypes={}): string {
     let variables: string[] = printVariables(vars);
@@ -458,6 +470,16 @@ function createUserDefined(userDefined: UserTypes={}): TypeName {
     }
 }
 
+export function createUserTypes(n: number, name: string="Defined"): UserTypes {
+    let userDefined: UserTypes={};
+
+    for (let i=0; i<n; i++) {
+        userDefined[`${name}${i}`] = createUserDefined(userDefined)
+    }
+
+    return userDefined;
+}
+
 class Scenario {
     pragma: string=DEFAULT_PRAGMA;
     userDefined: UserTypes={};
@@ -490,7 +512,7 @@ ${printContract('Sample', this.variables, [], this.userDefined)}
 // To avoid putting a BN object every time on the test cases
 // remove the object and convert the value to number
 // convet bignumber objects into number in string format (i.e. '123')
-function toStringObj(obj) {
+export function toStringObj(obj) {
     if (isArray(obj)) {
         return obj.map(i => toStringObj(i))
     } else if (isObject(obj)) {
@@ -501,7 +523,7 @@ function toStringObj(obj) {
 
         return res;
     } else if (obj.constructor.name == 'BN') {
-        return obj.toNumber()
+        return obj.toString()
     }
 
     return obj  
@@ -513,11 +535,9 @@ function cases0() {
 
     type Case = {
         source: string
-        case: {
-            method?: string,
-            params?: any[],
-            variables: {[name: string]: any}
-        }
+        method?: string,
+        params?: any[],
+        variables: {[name: string]: any}
     }
     
     const cases: Case[] = [
@@ -534,14 +554,12 @@ contract Sample {
         one.a = x;
     }
 }`,
-            case: {
-                params: [10],
-                variables: {
-                    'one': {
-                        'a': 10
-                    }
+            params: [10],
+            variables: {
+                'one': {
+                    'a': '10'
                 }
-            },
+            }
         },
         {
             source: `pragma solidity ^0.4.22;
@@ -559,12 +577,10 @@ contract Sample {
         one.a.push(20);
     }
 }`,
-            case: {
-                variables: {
-                    'one': {
-                        'aux': '0x0000000000000001',
-                        'a': [10, 20]
-                    }
+            variables: {
+                'one': {
+                    'aux': '0x0000000000000001',
+                    'a': ['10', '20']
                 }
             }
         },
@@ -582,12 +598,10 @@ contract Sample {
         one.a.push([1, 2, 3]);
     }
 }`,
-            case: {
-                variables: {
-                    'one': {
-                        'aux': '0x0000000000000000',
-                        'a': [[1, 2, 3]]
-                    }
+            variables: {
+                'one': {
+                    'aux': '0x0000000000000000',
+                    'a': [['1', '2', '3']]
                 }
             }
         }
@@ -597,8 +611,8 @@ contract Sample {
         test(`cases0_${indx}`, async t => {
         
             const c = cases[indx]
-            const method = c.case.method || 'test'
-            const params = c.case.params || [];
+            const method = c.method || 'test'
+            const params = c.params || [];
     
             const {contract, assignments} = await deployThings(c.source)
             
@@ -607,8 +621,8 @@ contract Sample {
             const state = new State(transaction.blockNumber as number, true);
             state.setAddress(contract.address);
     
-            for (const name in c.case.variables) {
-                const variable = c.case.variables[name];
+            for (const name in c.variables) {
+                const variable = c.variables[name];
                 const assignment = assignments.filter(a => a.Variable.name == name)
                 if (assignment.length != 1) {
                     throw Error(`Variable with name '${name}' not found`)
@@ -671,96 +685,6 @@ cases0();
         */
     }
     
-})();
-
-//console.log(JSON.stringify(scenario.generateTypes(), null, 2))
-
-/*
-for (const name in scenario.userDefined) {
-    console.log(name)
-    console.log(printUserDefined(name, scenario.userDefined[name], scenario.userDefined))
-}
-*/
-
-// console.log(scenario.printContract())
-
-type Case = {
-    name: string,
-    chunks: TypeName[][]
-    send?: any[]
-}
-
-/*
-let types: TypeName[] = shuffle([
-    ...generateTypes(5, makeSimpleVariable),
-    ...generateTypes(2, makeUserDefined),
-])
-
-let variables = types.map((type, indx) => createStorageVariable(`val${indx}`, type));
-
-const sample = `pragma solidity ^0.4.22;
-
-${printContract('Sample', variables)}
-`
-
-console.log(sample)
-
-// 0x081bfa5e47025c3d9df11b003b38cf8096dcb9c432eed1f40c1fbf18434b
-*/
-
-const cases: Case[] = [
-    {
-        name: "Simple",
-        chunks: [
-            [
-                /*
-                {
-                    type: Type.ArrayTypeName,
-                    name: 'array',
-                    base: {
-                        type: Type.ElementaryTypeName,
-                        name: 'bytes8',
-                    }
-                },
-                */
-                {
-                    type: Type.ElementaryTypeName,
-                    name: 'string'
-                },
-                /*
-                {
-                    type: Type.ElementaryTypeName,
-                    name: 'bytes'
-                }
-                */
-            ]
-        ],
-    },
-];
-
-(async() => {
-
-    // Table cases
-    
-    return;
-
-    for (const cc of cases) {
-        
-        let count = 0;
-        const chunks = cc.chunks.map((types, i) => types.map((type, j) => createStorageVariable(`val${count++}`, type)))
-        const variablesByName = arrayToObject([].concat.apply([], chunks) as Variable[], 'name');
-        
-        let sampleText = printContractsLinear(chunks);
-
-        const sample = `pragma solidity ^0.4.22;
-
-        ${sampleText.join('\n\n')}
-        `
-
-        console.log(sample)
-
-        await applyRandom(sample);
-    }
 })();
 
 (async() => {
@@ -902,7 +826,7 @@ async function applyRandom(sample: string) {
     const contracts         = walkAndFind(ast, 'ContractDefinition');
     const contractsById     = arrayToObject(contracts, 'id')
     const contractsByName   = arrayToObject(contracts, 'name');
-
+    
     const userTypes         = getUserTypes(contracts);
 
     //console.log("-- user types --")

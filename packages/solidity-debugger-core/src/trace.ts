@@ -1,12 +1,12 @@
 
 import Provider from './provider';
-import { Contracts } from './artifacts/contracts';
+import { Contracts, UserTypes } from './artifacts/contracts';
 import { walkAndFind } from './artifacts/ast';
 import { bytecodeId } from './utils';
 import { parseVariable, Variable } from './artifacts/variables';
 
 import { SingleFileSourceRange, Nodex, Sources, Bytecode } from './types';
-import { Assignment} from './state';
+import { Assignment, parseMemory} from './state';
 import { parseStack } from './state';
 import { List, Map, Set } from 'immutable';
 import { Transaction } from 'ethereum-types';
@@ -84,15 +84,19 @@ export class TraceManager {
 
     // cache of the storage. sometimes between jumps of calls the storage field in the trace does not show all the storage
     // TODO. not sure if this is a problem outside ganache
-    cache: {[address: string]: {[slot: string]: string}}
+    cache: {[address: string]: {[slot: string]: string}} = {};
+
+    // Usertypes for the contracts
+    userTypes: {[name: string]: UserTypes} = {};
+
+    // id of the variables already stored
+    variableIds: {[id: number]: boolean} = {};
 
     constructor(contracts: Contracts, sources: Sources) {
         this.provider = new Provider('http://localhost:8545');
         this.contracts = contracts;
         this.sources = sources;
-
-        this.cache = {};
-
+        
         // Lookup for bytecodes
         this.bytecodes = {};
         for (const name in this.contracts) {
@@ -100,6 +104,8 @@ export class TraceManager {
             
             this.bytecodes[contract.creation.id] = {contract: name, bytecode: contract.creation};
             this.bytecodes[contract.deployed.id] = {contract: name, bytecode: contract.deployed};
+
+            this.userTypes[name] = contract.userTypes;
         }
     }
     
@@ -151,16 +157,35 @@ export class TraceManager {
 
     setLocalVariable(node: Nodex, stack: number, isParameter: boolean=false) {
         // TODO. Make it work with memory and storage variables
-        if (node.storageLocation == "storageLocation" || node.storageLocation == "memory") {
+        if (node.storageLocation == "storageLocation") {
             return;
         }
-
+        
         if (isParameter && node.name == "") {
             node.name = `<${stack}>`
         }
         
-        let variable = parseStack(parseVariable(node, {}), stack);
-        this.setOtherVariable(variable);
+        const variable = parseVariable(node, this.userTypes);
+
+        // Check if variable is already there
+        if (this.variableIds[variable.id] === true) {
+            return
+        }
+
+        let assignment;
+        switch (node.storageLocation) {
+            case 'memory':
+                assignment = parseMemory(variable, stack);
+                break
+            case 'default':
+                assignment = parseStack(variable, stack);
+                break
+            default:
+                throw Error(`Storage location not handled: ${node.storageLocation}`)
+        }
+
+        this.setOtherVariable(assignment);
+        this.variableIds[variable.id] = true;
     }
     
     setContextByBytecode(bytecode: string) {
