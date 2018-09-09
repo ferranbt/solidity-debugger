@@ -6,11 +6,13 @@ var ethers = require('ethers');
 // provider
 const provider = new ethers.providers.JsonRpcProvider('http://localhost:8545', providers.networks.unspecified);
 
-const privateKey = process.env.PRIVATE_KEY;
+const signer = provider.getSigner(process.env.SIGNER_ADDRESS);
 
-// Wallet
-let wallet = new ethers.Wallet(privateKey, provider);
-wallet.provider = provider;
+// Default gas price and limit
+const opts = {
+    gasPrice: "0x70000000",
+    gasLimit: "0x600000",
+}
 
 class Contract {
     contract: any;
@@ -18,11 +20,11 @@ class Contract {
 
     constructor(address: string, abi) {
         this.address = address;
-        this.contract = new ethers.Contract(address, abi, wallet);
+        this.contract = new ethers.Contract(address, abi, signer);
     }
 
     async send(method: string, args: any[]): Promise<Transaction> {
-        let receipt = await this.contract[method](...args);
+        let receipt = await this.contract[method](...args, opts);
         const tx = await provider.getTransaction(receipt.hash)
         return tx;
     }
@@ -31,7 +33,7 @@ class Contract {
 async function deploy(abi: string, bytecode: string, ...args) {
     const data = ethers.Contract.getDeployTransaction(bytecode, abi, ...args);
 
-    const tx      = await wallet.sendTransaction(data);
+    let tx = await signer.sendTransaction(Object.assign({}, data, opts));
     const receipt = await provider.getTransactionReceipt(tx.hash);
 
     const address   = receipt.contractAddress;

@@ -30,5 +30,13 @@ export function compile(source: string) {
         }
     }
 
-    return JSON.parse(solc.compileStandardWrapper(JSON.stringify(input)));
+    const output = JSON.parse(solc.compileStandardWrapper(JSON.stringify(input)));
+
+    for (const err of output.errors || []) {
+        if (err.severity == 'error') {
+            throw Error(`Error compiling: ${err.formattedMessage}`)
+        }
+    }
+
+    return output;
 }

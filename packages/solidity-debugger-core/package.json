@@ -5,11 +5,14 @@
   "main": "lib/src/index.js",
   "types": "lib/src/index.d.ts",
   "scripts": {
+    "ganache": "ganache-cli",
     "prepublish": "tsc -p ./",
     "compile": "tsc -p ./",
     "tslint": "tslint ./**/*.ts",
     "watch": "tsc -w -p ./",
-    "test": "mocha -r ts-node/register test/**.ts"
+    "pretest": "ts-node test/helpers/pretest.ts",
+    "test": "tsc && ava --files lib/test/** --match '!*random*'",
+    "test-random": "tsc && ava --files lib/test/** --match '*random*'"
   },
   "devDependencies": {
     "@0xproject/sol-compiler": "^0.5.0",
@@ -17,7 +20,9 @@
     "@types/chai": "^4.1.4",
     "@types/mocha": "^5.2.5",
     "@types/node": "^7.0.67",
+    "ava": "^0.25.0",
     "chai": "^4.1.2",
+    "ganache-cli": "^6.1.8",
     "mocha": "^5.2.0",
     "solc": "^0.4.24",
     "ts-node": "^6.2.0",
