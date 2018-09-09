@@ -11,7 +11,8 @@
     "tslint": "tslint ./**/*.ts",
     "watch": "tsc -w -p ./",
     "pretest": "ts-node test/helpers/pretest.ts",
-    "test": "tsc && ava --verbose --files lib/test/**"
+    "test": "tsc && ava --files lib/test/** --match '!*random*'",
+    "test-random": "tsc && ava --files lib/test/** --match '*random*'"
   },
   "devDependencies": {
     "@0xproject/sol-compiler": "^0.5.0",

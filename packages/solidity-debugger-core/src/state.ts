@@ -430,10 +430,6 @@ function _decodeValue(data: string, assignment: Assignment): any {
             return data == '0' ? '' :  util.hexToString(data)
         case "byte":
         case "bytes":
-            if (data.length / 2 > assignment.Bytes) {
-                data = data.substr(0, assignment.Bytes * 2)
-            }
-
             return data.startsWith('0x') ? data : '0x' + data;
     }
 
@@ -546,9 +542,15 @@ async function _decodeMemory(state: State, assignment: Assignment, offset: numbe
         case 'struct':
             return _decodeStructMemory(state, assignment, offset);
         default:
-            // number of bytes
-            var value = state.memory(2 * offset, 64)
-            return _decodeValue(value, assignment);
+            let data = state.memory(2 * offset, 64)
+
+            if (assignment.Variable.type.name.startsWith('byte')) {
+                if (data.length / 2 > assignment.Bytes) {
+                    data = data.substr(0, assignment.Bytes * 2)
+                }
+            }
+
+            return _decodeValue(data, assignment);
     }
 }
 
