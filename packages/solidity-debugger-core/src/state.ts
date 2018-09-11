@@ -20,7 +20,7 @@ export class State {
 
     _cache: {[address: string]: {[slot: string]: string}};
     _nocache: boolean=false;
-
+    
     constructor(block: number, nocache: boolean=false) {
         this._provider = new Provider('http://localhost:8545');
         this._blockNumber = block;
@@ -52,7 +52,7 @@ export class State {
         if (this._cache[this._address][slot] != undefined) {
             return this._cache[this._address][slot];
         }
-
+        
         const value = await this._provider.getStorageAt(this._address, slot, this._blockNumber)
         this._cache[this._address][slot] = value;
 

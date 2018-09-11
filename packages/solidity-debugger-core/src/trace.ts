@@ -1,23 +1,15 @@
 
 import Provider from './provider';
 import { Contracts, UserTypes } from './artifacts/contracts';
-import { walkAndFind } from './artifacts/ast';
-import { bytecodeId } from './utils';
+import { walkAndFind, walk } from './artifacts/ast';
+import { bytecodeId, arrayToObject, add } from './utils';
 import { parseVariable, Variable } from './artifacts/variables';
 
-import { SingleFileSourceRange, Nodex, Sources, Bytecode } from './types';
+import { SingleFileSourceRange, Nodex, Sources, Bytecode, SourceRange } from './types';
 import { Assignment, parseMemory} from './state';
 import { parseStack } from './state';
 import { List, Map, Set } from 'immutable';
-import { Transaction } from 'ethereum-types';
-
-function isLine(position: SingleFileSourceRange): boolean {
-    // During the tests, if the last line is the last line of the contract position.end == undefined
-    if (position.end == undefined || position.start == undefined) {
-        return false;
-    }
-    return position.start.line == position.end.line
-}
+import { Transaction, StructLog } from 'ethereum-types';
 
 function contractCreationToken(index): string { 
     return `(Contract Creation - Step ${index})`
@@ -28,13 +20,14 @@ function isCall(log: any): boolean {    // TODO. Move to utils
 }
 
 export enum StepType {
-    Function,
+    // Start of the function
+    FunctionIn,
+    // End of the function (It does not include the return parameter)
+    FunctionOut,
+    // Jump, call, delegatecall, callcode, create (Everything that changes function)
     Jump,
-    Return,
+    // Statements inside functions (assignment, for, if, return...)
     Line,
-    Call,
-    Create,
-    Stop,
 }
 
 export type Step = {
@@ -55,16 +48,54 @@ export type Result = {
     steps: Step[],
 }
 
-export type Context = {
-    address: string,
+const isReturn = (variable: Variable): boolean => variable.name.startsWith('<')
+
+type Context2 = {
     bytecode: string,
-    contract: string,
-    function: string,
-    isExternal: boolean,
-    isContructor: boolean,
+    address: string,
 }
 
-const isReturn = (variable: Variable): boolean => variable.name.startsWith('<')
+export type Context = {
+    address: string,
+    function: string,
+}
+
+type Aux = {
+    index: number,
+    stepType?: StepType,
+    node: Nodex,
+    srcmap: SourceRange,
+    history: Context2[],
+    log: StructLog
+}
+
+function setType(t: StepType): ((Aux) => Aux) {
+    return function(aux: Aux): Aux {
+        return Object.assign({}, aux, {
+            stepType: t
+        })
+    }
+}
+
+function collapse(result: Aux[]): Aux[] {
+    let res: Aux[] =  []
+    for (let i=result.length-1; i>0; i--) {
+        if (result[i].node.id != result[i-1].node.id) {
+            res.push(result[i-1]);
+        }
+    }
+    return res;
+}
+
+function compare(a: Aux,b: Aux) {
+    if (a.index < b.index)
+      return -1;
+    if (a.index > b.index)
+      return 1;
+    return 0;
+}
+
+// TODO. tests with scopes and other features
 
 export class TraceManager {
     provider: Provider;
@@ -92,6 +123,9 @@ export class TraceManager {
     // id of the variables already stored
     variableIds: {[id: number]: boolean} = {};
 
+    // node lookup for nodes depending on the src
+    nodeLookup: {[contract: string]: {[src: string]: Nodex}} = {};
+
     constructor(contracts: Contracts, sources: Sources) {
         this.provider = new Provider('http://localhost:8545');
         this.contracts = contracts;
@@ -101,11 +135,12 @@ export class TraceManager {
         this.bytecodes = {};
         for (const name in this.contracts) {
             const contract = this.contracts[name];
-            
+
             this.bytecodes[contract.creation.id] = {contract: name, bytecode: contract.creation};
             this.bytecodes[contract.deployed.id] = {contract: name, bytecode: contract.deployed};
 
             this.userTypes[name] = contract.userTypes;
+            this.nodeLookup[name] = arrayToObject([].concat.apply([], walk(contract.node)), 'src')
         }
     }
     
@@ -116,42 +151,12 @@ export class TraceManager {
         }
         
         let contract = this.contracts[bytecode.contract]
-        
-        this.calls = this.calls.push({
-            address: address,
-            bytecode: bytecodeId,
-            contract: contract.name,
-            function: '',
-            isExternal: true,
-            isContructor: false
-        });
 
         contract.globals.forEach(global => this.setOtherVariableWithScope(contract.node.id, global));
         contract.globals.forEach(global => this.setOtherVariable(global)) // if works with scope is better this way coz then nested contracts can see their own varaibles
-
+        
         if (this.cache[address] == undefined) {
             this.cache[address] = {}
-        }
-    }
-    
-    addFunction(name: string) {
-        let {address, contract, bytecode} = this.calls.get(-1);
-
-        this.calls = this.calls.push({
-            address,
-            bytecode,
-            contract,
-            function: name,
-            isExternal: false,
-            isContructor: name == "constructor"
-        });
-    }
-
-    // add return only removes the call
-    addReturn() {
-        this.calls = this.calls.pop();
-        if (this.calls.get(-1).isExternal) {
-            this.calls = this.calls.pop();
         }
     }
 
@@ -188,22 +193,6 @@ export class TraceManager {
         this.variableIds[variable.id] = true;
     }
     
-    setContextByBytecode(bytecode: string) {
-        this.addContract('creation', bytecodeId(bytecode))
-    }
-
-    async setContextByCreation(address: string, name: string) {
-        if (this.contracts[name] == undefined) {
-            throw Error(`Contract ${name} not found`)
-        }
-        this.addContract(address, this.contracts[name].creation.id)
-    }
-
-    async setContextByCall(address: string) {
-        const code = await this.provider.getCode(address);
-        this.addContract(address, bytecodeId(code))
-    }
-    
     setOtherVariableWithScope(scope: number, variable: Assignment) {
         if (this.scopes.get(scope) == undefined) {
             this.scopes = this.scopes.update(scope, (x) => Set([variable]))
@@ -215,17 +204,9 @@ export class TraceManager {
     setOtherVariable(variable: Assignment) {
         this.setOtherVariableWithScope(variable.Variable.scope, variable)
     }
-
-    getCurrentBytecode(): Bytecode {
-        return this.bytecodes[this.calls.get(-1).bytecode].bytecode;
-    }
-
-    getCurrentContract() {
-        return this.contracts[this.calls.get(-1).contract];
-    }
-
-    findScope(id: number): number[] {
-        let {parents, scopes} = this.getCurrentContract();
+    
+    findScope(bytecode: string, id: number): number[] {
+        let {parents, scopes} = this.contracts[this.bytecodes[bytecode].contract];
 
         let res: number[] = scopes[id] || [];
         while (res.length == 0) {
@@ -235,148 +216,221 @@ export class TraceManager {
         return [ ...res, id];
     }
 
-    findAssignments(id: number): Assignment[] {
-        let aux = this.findScope(id).map(x => this.scopes.get(x)).filter(i => i != undefined).map(i => i.toJS())
+    findAssignments(bytecode: string, id: number): Assignment[] {
+        let aux = this.findScope(bytecode, id).map(x => this.scopes.get(x)).filter(i => i != undefined).map(i => i.toJS())
         
         // union of the nested sets in aux
         return Set([].concat.apply([], aux)).toJS();
     }
 
     async trace(transaction: Transaction): Promise<Step[]> {
-
+        
         if (transaction.to == undefined) {
             throw Error(`Tx to is undefined ${transaction.hash}`)
         }
 
+        let created = 0;
+
+        let id;
+        let address;
         if (transaction.to == '0x0') {
             // Contract creation
-            this.setContextByBytecode(transaction.input);
+            address = contractCreationToken('0')
+            id = bytecodeId(transaction.input)
+
+            created = 1;
         } else {
             // Call
-            await this.setContextByCall(transaction.to)
+            address = transaction.to;
+            id = bytecodeId(await this.provider.getCode(transaction.to));
         }
         
         const trace = await this.provider.debugTransaction(transaction.hash);
 
-        let steps: Step[] = [];
-        let lastLine: number = -1;
+        let history: Context2[] = [{
+            bytecode: id,
+            address: address,
+        }];
+        
+        let result: Aux[] = [];
 
-        for (const log of trace.structLogs) {
-            if (this.calls.size == 0) {
-                break;
-            }
+        let count = 0;
+        for (const indx in trace.structLogs) {
+            const log = trace.structLogs[indx]
 
-            const bytecode = this.getCurrentBytecode();
-            const line = bytecode.source[log.pc];
-
-            if (line == undefined) {
+            const bytecode = this.bytecodes[history[history.length - 1].bytecode]
+            const srcmap = bytecode.bytecode.source[log.pc];
+            
+            if (srcmap == undefined) {
                 continue
             }
-            
-            let step: undefined | StepType = undefined;
 
-            // Return from constructor
-            if (log.op == 'RETURN' && this.calls.get(-1).isContructor) {
-                step = StepType.Return
+            if (srcmap.opcode != log.op) {
+                throw Error(`Opcodes dont match: ${srcmap.opcode} ${log.op}`)
             }
 
-            // Return normal calls
-            else if (line.srcmap.jump == 'o' && line.node.nodeType != 'ContractDefinition' /* && line.node.nodeType != "FunctionDefinition" */) {
-                step = StepType.Return
-            }
-            
-            // Call to another contract. Either 'DELEGATE_CALL', 'CALL' or 'CALLCODE'.
-            else if (isCall(log)) {
-                step = StepType.Call;
-            }
-            
-            // Local variable declaration
-            else if (line.node.nodeType == 'VariableDeclaration' && !line.node.stateVariable) {
-                this.setLocalVariable(line.node, log.stack.length);
-            }
-            
-            // Function definition line.opcode == "JUMPDEST" &&
-            // Last function definition
-            else if (line.node.nodeType == 'FunctionDefinition') {
-                const next = bytecode.source[log.pc + 1];
-
-                if (next != undefined && next.node.nodeType != 'FunctionDefinition') {
-                    step = StepType.Function
-                    
-                    this.addFunction(line.node.name);
-                    
-                    const parameters = walkAndFind(line.node.parameters, 'VariableDeclaration').reverse();
-                    const returns = walkAndFind(line.node.returnParameters, 'VariableDeclaration');
-                    
-                    returns.concat(parameters).reverse().forEach((variable, index) => {
-                        this.setLocalVariable(variable, log.stack.length - 1 - index, true);
-                    });
-                }
-            }
-            
-            // Jump to another function
-            else if (line.srcmap.jump == 'i' && line.node.nodeType == 'FunctionCall') {
-                step = StepType.Jump
-            }
-            
-            // Line
-            else if (isLine(line.location)) {
-                if (line.node.nodeType != 'VariableDeclaration' && line.node.nodeType != 'ElementaryTypeName') {
-                    let position = line.location.start.line;
-                    if (position != lastLine) {
-                        step = StepType.Line
-                        lastLine = position;
-                    }  
-                }
+            if (srcmap.node == undefined) {
+                continue
             }
 
-            if (step != undefined) {
-                
-                // if its jump or call, check the last, if its line remove it.
-                if (step == StepType.Call || step == StepType.Jump) {
-                    if (steps[steps.length - 1].type == StepType.Line) {
-                        steps.splice(-1, 1)
-                    }
-                }
-                
-                // Between different calls, storage dont show the storage as it was modified previously
-                let storage = log.storage;
-                let address = this.calls.get(-1).address;
-                storage = Object.assign(this.cache[address], log.storage);
-                this.cache[address] = storage;
-                
-                // Variables for this scope. Return variables are only shown on Return step
-                let variables = this.findAssignments(line.node.id)
-                variables = variables.filter(x => !isReturn(x.Variable) !== (step == StepType.Return));    // XOR
-                
-                steps.push({
-                    type: step,
-                    assignments: variables,
-                    calls: this.calls.toJS(),
-                    fileName: line.fileName,
-                    location: line.location,
-                    state: {
-                        memory: Object.assign([], log.memory),
-                        stack: Object.assign([], log.stack),
-                        storage: Object.assign([], storage),
-                    },
+            const node = srcmap.node;
+            if (node.nodeType == 'VariableDeclaration') {
+                this.setLocalVariable(node, log.stack.length);
+            }
+
+            // Call
+            if (log.op == 'DELEGATECALL' || log.op == 'CALL') {
+                const address = '0x' + log.stack[log.stack.length - 2].substr(24, 64);
+                const destiny = bytecodeId(await this.provider.getCode(address));
+
+                history.push({
+                    bytecode: destiny,
+                    address: address,
+                });
+            }
+
+            // Create contract
+            else if (log.op == 'CREATE') {
+                const id = this.contracts[node.expression.typeName.name].creation.id;
+
+                history.push({
+                    bytecode: id,
+                    address: contractCreationToken(created)
                 })
-            }
-            
-            if (step == StepType.Return) {
-                this.addReturn();
-                lastLine = -1;
-            }
-            
-            // set the context later
-            if (log.op == 'CREATE') {
-                this.setContextByCreation(contractCreationToken(log.pc),line.node.expression.typeName.name)
-                this.addFunction('constructor');
+
+                created++;
             }
 
-            if (isCall(log)) {
-                const address = '0x' + log.stack[log.stack.length-2].substr(24, 64);
-                await this.setContextByCall(address);
+            // Return from constructor (RETURN is from constructor and STOP is from function)
+            else if (log.op == 'RETURN' || log.op == 'STOP') {
+                history.splice(-1, 1)
+            }
+
+            result.push({
+                index: count,
+                node: Object.assign({}, node),
+                srcmap: Object.assign({}, srcmap),
+                history: Object.assign([], history),
+                log: Object.assign({}, log),
+            })
+
+            count++;
+        }
+        
+        if (history.length != 0) {
+            throw Error(`History must be zero at the end but found: ${history.length}`)
+        }
+
+        const resultByIndex = arrayToObject(result, 'index');
+        
+        const nextFunctionDefinition = (index: number) => {
+            for (let j=index; j<result.length; j++) {
+                const case1 = resultByIndex[j.toString()];
+                const case2 = resultByIndex[(j+1).toString()];
+
+                if (case1.node.nodeType == 'FunctionDefinition' && case2.node.nodeType != 'FunctionDefinition') {
+                    return case1
+                }
+            }
+
+            throw Error('nothing found')
+        }
+
+        // Calls to other functions (DELEGATE CALL, CALL, Function JUMP)
+        const functionCalls = result.filter(n => (n.srcmap.srcmap.jump == 'i' && n.node.nodeType == 'FunctionCall') || isCall(n.log)).map(setType(StepType.Jump));
+        
+        // Function definitions
+        const functionDef = functionCalls.map(i => nextFunctionDefinition(i.index)).map(setType(StepType.FunctionIn));
+        
+        // Returns from a function
+        const functionReturn = result.filter(n => n.log.op == 'RETURN' || (n.srcmap.srcmap.jump == 'o' && n.node.nodeType != 'ContractDefinition')).map(setType(StepType.FunctionOut));
+
+        // Body
+        const simpleTypes = [
+            'Assignment',
+            'VariableDeclarationStatement',
+            'Return'
+        ]
+
+        const branchTypes = [
+            'IfStatement',
+            'ForStatement'
+        ]
+
+        const bodySmtm      = collapse(result);
+        const simpleStmts   = bodySmtm.filter(n => simpleTypes.indexOf(n.node.nodeType) != -1).map(setType(StepType.Line));
+        const branchStmts   = bodySmtm.filter(n => branchTypes.indexOf(n.node.nodeType) != -1 && n.log.op as string == 'JUMPI').map(setType(StepType.Line));
+
+        const smts: Aux[] = [
+            ...functionCalls,
+            ...functionDef,
+            ...functionReturn,
+            ...simpleStmts,
+            ...branchStmts,
+            setType(StepType.FunctionIn)(nextFunctionDefinition(0))
+        ]
+
+        smts.sort(compare)
+
+        let steps: Step[] = [];
+        
+        let otherHistory: Context[] = [];
+        for (const i of smts) {
+            const stepType = i.stepType as StepType;
+                            
+            // Function declaration
+            if (stepType == StepType.FunctionIn) {
+                // check for a different contract
+                if (otherHistory.length == 0 || i.history[i.history.length - 1].address != otherHistory[otherHistory.length -1].address) {
+                    this.addContract(i.history[i.history.length - 1].address, i.history[i.history.length - 1].bytecode)
+                }
+                
+                otherHistory.push({
+                    address: i.history[i.history.length - 1].address,
+                    function: i.node.name
+                })
+
+                const parameters    = walkAndFind(i.node.parameters, 'VariableDeclaration').reverse();
+                const returns       = walkAndFind(i.node.returnParameters, 'VariableDeclaration');
+                
+                returns.concat(parameters).reverse().forEach((variable, index) => {
+                    this.setLocalVariable(variable, i.log.stack.length - 1 - index, true);
+                });
+            }
+            
+            let assignments: Assignment[] = [];
+            if (stepType != StepType.FunctionOut) {
+                assignments = this.findAssignments(i.history[i.history.length - 1].bytecode, i.node.id)
+                assignments = assignments.filter(x => !isReturn(x.Variable) !== (i.node.nodeType == 'Return'));    // XOR
+            }
+
+            // Between different calls, storage dont show the storage as it was modified previously
+            let storage = i.log.storage;
+            let address = otherHistory[otherHistory.length - 1].address;
+            storage = Object.assign(this.cache[address], i.log.storage);
+            this.cache[address] = storage;
+
+            steps.push({
+                type: i.stepType as StepType,
+                calls: Object.assign([], otherHistory),
+                assignments: assignments,
+                fileName: i.srcmap.fileName,
+                location: i.srcmap.location,
+                state: {
+                    memory: Object.assign([], i.log.memory),
+                    stack: Object.assign([], i.log.stack),
+                    storage: Object.assign([], storage),
+                },
+            })
+
+            // Function return
+            if (stepType == StepType.FunctionOut) {
+                // Safe check, the function we return from is the last one on the stack
+                if (i.node.name != otherHistory[otherHistory.length - 1].function) {
+                    throw Error('')
+                }
+
+                otherHistory.splice(-1, 1)
             }
         }
 
