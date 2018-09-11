@@ -21,7 +21,7 @@ const createMemoryVariable = (name: string, type: TypeName): Variable => ({
 // write some dont starts the variables, just write the values
 // so that we can make recursive calls to writesome
 // i.e. one struct creates an array
-function writeSome(name: string, type: TypeName, value: any) {
+export function writeSome(name: string, type: TypeName, value: any) {
     switch (type.name) {
         case 'array':
             return value.map((v, indx) => `${name}[${indx}] = ${v};`).join('\n')

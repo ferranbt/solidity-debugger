@@ -1,12 +1,5 @@
 
-import newContract from './helpers/contract';
-import {parseVariable} from '../src/artifacts/variables';
-import {decodeAssignment, parseStorage, State} from '../src/state';
-import {arrayToObject} from '../src/utils';
-import {walkAndFind} from '../src/artifacts/ast';
-import {getStateVariables, getUserTypes} from '../src/artifacts/contracts';
-
-import {compile, DEFAULT_FILENAME} from './helpers/compiler'
+import {decodeAssignment, State} from '../src/state';
 import {toStringObj, deployStorageContract} from './helpers/state';
 
 import test from 'ava';
@@ -125,8 +118,6 @@ async function applyCase(c: Case, t) {
         }
 
         const value = await decodeAssignment(state, assignment[0]);
-
-        console.log(value)
         t.deepEqual(variable, toStringObj(value))
     }
 }
