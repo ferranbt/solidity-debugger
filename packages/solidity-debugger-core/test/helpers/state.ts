@@ -2,6 +2,7 @@
 import {decodeIntFromHex} from '../../src/state';
 import {TypeName, Type, Variable, getBytes, parseVariable} from '../../src/artifacts/variables';
 import {range, randomNumber, shuffle} from './utils';
+import {removeHexPrefix} from '../../src/utils';
 
 const crypto = require('crypto');
 
@@ -181,43 +182,6 @@ export async function generateRandomElementaryTypes(type: TypeName) {
 
 export const validMembers = (variables: Variable[]): Variable[] => variables.filter(v => v.type.name != 'struct' && v.type.name != 'array')
 
-/*
-export async function generateStorateRandomValues(type: TypeName): Promise<any> {
-    switch (type.name) {
-        case 'struct':
-
-            let values0: any[] = [];
-            let show0 = {};
-
-            for (const val of validMembers(type.members as Variable[])) {
-                const x = await generateRandomValues(val.type);
-
-                values0.push(x)
-                show0[val.name] = x;
-            }
-
-            return {
-                value: values0,
-                show: show0
-            }
-
-        case 'enum':
-            const values = type.values as string[]
-            const value = getRandom(values);
-
-            return {
-                value: values.indexOf(value),
-                show: value,
-            }
-        case 'array':
-            const v = await Promise.all(range(0, randomNumber(0, 10)).map(i => generateRandomValues(type.base as TypeName)))
-            return v
-        default:
-            return generateRandomElementaryTypes(type)
-    }
-}
-*/
-
 export async function generateRandomValues(type: TypeName): Promise<any> {
     switch (type.name) {
         case 'struct':
@@ -375,7 +339,7 @@ function printUserDefined(name: string, type: TypeName, userDefined: UserTypes) 
     }
 }
 
-export const printVariables = (variables: Variable[]): string[] => variables.map(printTypeName);
+export const printVariables = (variables: Variable[]): string => variables.map(printTypeName).join('\n');
 
 function printTypeName(variable: Variable): string {
     switch(variable.type.name) {
@@ -422,5 +386,22 @@ export async function deployStorageContract(sample: string) {
     return {
         contract,
         assignments
+    }
+}
+
+export function writeSome(name: string, type: TypeName, value: any) {
+    switch (type.name) {
+        case 'array':
+            return value.map((v, indx) => `${name}[${indx}] = ${v};`).join('\n')
+        case 'struct':
+            return (type.members as Variable[]).map(v => writeSome(`${name}.${v.name}`, v.type, value[v.name])).join('\n')
+        case 'enum':
+            return `${name} = ${type.refName}.${value};`
+        case 'string':
+            return `${name} = "${value}";`
+        case 'bytes':
+            return `${name} = hex"${removeHexPrefix(value)}";`
+        default:
+            return `${name} = ${value};`
     }
 }

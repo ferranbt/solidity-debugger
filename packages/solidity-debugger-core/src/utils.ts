@@ -13,7 +13,7 @@ export function arrayToObject<T>(array: T[], keyField): {[id: string]: T} {
     }, {})
 }
 
-export function bytecodeId(bytecode: string) {
+export function bytecodeId(bytecode: string): string {
     return sha256(bytecodeToBytecodeRegex(stripHexPrefix(bytecode))).toString('hex').substr(0, 8);
 }
 
