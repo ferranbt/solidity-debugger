@@ -31,6 +31,50 @@ const DEFAULT_METHOD    = 'set';
 
 const cases: Case[] = [
     {
+        name: "Complex case",
+        contract: 'Contract_0',
+        method: 'func_0',
+        trace: [],
+        source: `pragma solidity ^0.4.22;
+
+contract Contract_0 {
+    Contract_1 obj_1;
+    function Contract_0() {
+        obj_1 = new Contract_1();
+    }
+            
+    function func_0() {
+        if (false) {
+            int x = 0;
+        }
+        obj_1.delegatecall(bytes4(sha3("func_0()")));
+        int y = 0;
+    }
+}
+        
+contract Contract_1 {
+    Contract_2 obj_2;
+    function Contract_1() {
+        obj_2 = new Contract_2();
+    }
+            
+    function func_0() {
+        int x = 0;
+        obj_2.delegatecall(bytes4(sha3("func_0()")));
+        int y = 0;
+    }
+}
+        
+contract Contract_2 {    
+    function func_0() {
+        if (true) {
+            int x = 0;
+        }
+    }
+}
+`
+    },
+    {
         name: "Call to parent contract",
         method: 'set',
         params: ['2'],
@@ -280,11 +324,17 @@ contract Sample is B {
     }
 ]
 
+/*
 for (const cc of cases) {
     test(cc.name, async t => {
         await applyCase(cc, t);
     });
 }
+*/
+
+test(cases[0].name, async t => {
+    await applyCase(cases[0], t)
+})
 
 async function checkStep(indx: string, t, step: Step, trace: TraceCase, transaction: Transaction) {
     

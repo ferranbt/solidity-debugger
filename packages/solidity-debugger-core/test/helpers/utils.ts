@@ -23,12 +23,13 @@ export function randomNumber(low: number, high: number): number {
     return Math.floor(Math.random() * (high - low) + low)
 }
 
-export function randomString(n: number): string {
-    var text = "";
-    var possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  
+const DEFAULT_STRING = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+export function randomString(n: number, possible: string=DEFAULT_STRING): string {
+    let text = "";
+
     for (var i = 0; i < n; i++)
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
   
     return text;
 }
