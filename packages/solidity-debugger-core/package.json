@@ -5,7 +5,8 @@
   "main": "lib/src/index.js",
   "types": "lib/src/index.d.ts",
   "scripts": {
-    "ganache": "ganache-cli",
+    "rpc-ganache": "ganache-cli",
+    "rpc-geth": "geth --dev --rpc --rpcapi eth,debug",
     "prepublish": "tsc -p ./",
     "compile": "tsc -p ./",
     "tslint": "tslint ./**/*.ts",

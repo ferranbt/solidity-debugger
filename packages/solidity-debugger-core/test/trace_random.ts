@@ -250,6 +250,7 @@ function printContracts(contracts: {[name: string]: Contract}) {
     `
 }
 
+/*
 (async() => {
 
     for (let i=0; i<1000; i++) {
@@ -291,3 +292,4 @@ function printContracts(contracts: {[name: string]: Contract}) {
     }
 
 })();
+*/

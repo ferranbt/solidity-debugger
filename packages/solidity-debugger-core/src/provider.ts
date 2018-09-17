@@ -13,8 +13,8 @@ class Provider {
         return this.provider.send('eth_getBlockByHash', [hash, true]);
     }
     
-    async getStorageAt(address: String, position: String, block: number) {
-        return this.provider.send('eth_getStorageAt', [address, position, block]);
+    async getStorageAt(address: String, position: number | string, block: number) {
+        return this.provider.send('eth_getStorageAt', [address, position, '0x' + block.toString(16)]);
     }
     
     async getCode(hash: String): Promise<string> {
